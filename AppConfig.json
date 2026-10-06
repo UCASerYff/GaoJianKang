@@ -1,0 +1,11 @@
+{
+  "module": "Health",
+  "name": "搞健康",
+  "bundle_id": "com.gaoseries.GaoJianKang",
+  "executable": "GaoJianKang",
+  "scheme": "gaojiankang",
+  "widget_folder": "Widgets",
+  "widget": "GaoJianKangWidgets",
+  "group": "5G96498KGJ.com.gaoseries.GaoJianKang",
+  "preferences": "com.gaoseries.GaoJianKang.Health"
+}
