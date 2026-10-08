@@ -29,6 +29,7 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment:.leading,spacing:20) {
                         switch store.selectedTab {
+                        case 10: SleepRecordsView()
                         case 5: QuickEventsView()
                         case 0: TodayView()
                         case 2: TrendsView()
@@ -63,11 +64,12 @@ struct ContentView: View {
             }
             toolbarItemNoChrome(.primaryAction) {
                 HStack(spacing:12) {
-                    Menu { ForEach(RecordKind.allCases) { kind in Button(kind.title(store.en)) { store.new(kind) } } } label: { Label(store.t("记一笔","Record"),systemImage:"plus") }
+                    Menu { Button(store.t("睡眠记录","Sleep")) { store.sleepEditor = true }; ForEach(RecordKind.allCases) { kind in Button(kind.title(store.en)) { store.new(kind) } } } label: { Label(store.t("记一笔","Record"),systemImage:"plus") }
                 }
                 .frame(width:360,alignment:.trailing)
             }
         }
+        .sheet(isPresented:$store.sleepEditor) { SleepRecordEditor().environmentObject(store) }
         .sheet(item:$store.editor) { record in RecordEditor(record:record).environmentObject(store) }
         .alert(store.t("操作未完成","Action failed"),isPresented:Binding(get:{ store.message != nil },set:{ if !$0 { store.message=nil } })) { Button(store.t("好","OK")) { store.message=nil } } message:{ Text(store.message ?? "") }
         .onChange(of:phase) { _,p in if p == .active { store.reload() } }
@@ -92,6 +94,7 @@ struct ContentView: View {
                         sidebarRow(0,title:store.t("今日概览","Today"),symbol:"sun.max")
                         sidebarRow(5,title:store.t("快速事项","Quick events"),symbol:"square.grid.3x3.fill")
                         sidebarRow(6,title:store.t("喝水记录","Water"),symbol:"drop.fill")
+                        sidebarRow(10,title:store.t("睡眠记录","Sleep"),symbol:"moon.stars.fill")
                         sidebarRow(7,title:store.t("饮食记录","Meals"),symbol:"fork.knife")
                         sidebarRow(8,title:store.t("运动记录","Activity"),symbol:"figure.walk")
                         if !store.state.preferences.hideWeight { sidebarRow(9,title:store.t("体重记录","Weight"),symbol:"scalemass.fill") }
@@ -122,7 +125,7 @@ struct ContentView: View {
             }
             VStack(alignment:.leading,spacing:2) {
                 Text(store.t("搞健康","Gao Health")).font(.headline)
-                Text(store.t("喝水、饮食、运动与体重","Water, meals, activity and weight")).font(.caption2).foregroundStyle(.secondary)
+                Text(store.t("喝水、睡眠、饮食与运动","Water, sleep, meals and activity")).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength:0)
         }
@@ -175,7 +178,7 @@ struct ContentView: View {
     }
     /// 状态底卡（词元 statusFooter 风格）：今日记录数 + 存储说明。
     private var statusFooter: some View {
-        let todayCount = store.state.records.filter { Calendar.current.isDateInToday($0.occurredAt) }.count
+        let todayCount = store.state.records.filter { Calendar.current.isDateInToday($0.occurredAt) }.count + store.sleepRecords.filter { Calendar.current.isDateInToday($0.endedAt) }.count
         return VStack(alignment:.leading,spacing:7) {
             HStack(spacing:7) {
                 Circle().fill(Theme.teal).frame(width:7,height:7)

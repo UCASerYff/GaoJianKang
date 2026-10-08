@@ -22,6 +22,7 @@ enum AppBackupRestore {
             }) else { throw CocoaError(.fileReadCorruptFile) }
             _ = try run("/usr/bin/ditto",["-x","-k",archive.path,root.path])
             let manifest=try BackupIntegrity.verify(root)
+            try AppBackupExport.validateSharedSleep(root.appendingPathComponent("AppGroupContainer/SharedSleep",isDirectory:true))
             let current=Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "3.63"
             guard manifest.version.compare(current,options:.numeric) != .orderedDescending,
                   fm.fileExists(atPath:root.appendingPathComponent("ApplicationSupport-Health").path),
@@ -29,7 +30,19 @@ enum AppBackupRestore {
             return (root,manifest)
         } catch { try? fm.removeItem(at:root);throw error }
     }
+    private static func requireSharedSleepPeerClosed(_ staged:URL) throws {
+        guard FileManager.default.fileExists(atPath:staged.appendingPathComponent("AppGroupContainer/SharedSleep").path) else { return }
+        #if BACKUP_SAFETY_TEST
+        let peerIsRunning = ProcessInfo.processInfo.environment["TEST_SLEEP_PEER_RUNNING"] == "1"
+        #else
+        let peerIsRunning = NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.gaojiezou.rhythm" })
+        #endif
+        guard !peerIsRunning else {
+            throw NSError(domain:"GQNS.Backup",code:2,userInfo:[NSLocalizedDescriptionKey:"请先退出搞节奏，再恢复共享睡眠记录。当前资料尚未改动。"])
+        }
+    }
     static func schedule(_ staged:URL) throws {
+        try requireSharedSleepPeerClosed(staged)
         let job=Job(staged:staged,safety:jobs.appendingPathComponent("恢复前原始数据-"+UUID().uuidString))
         try JSONEncoder().encode(job).write(to:pending,options:.atomic)
     }
@@ -37,8 +50,10 @@ enum AppBackupRestore {
         let fm=FileManager.default
         guard fm.fileExists(atPath:pending.path) else { return }
         var job=try JSONDecoder().decode(Job.self,from:Data(contentsOf:pending))
+        try requireSharedSleepPeerClosed(job.staged)
         if job.applying { try rollback(job);try fm.removeItem(at:pending);throw CocoaError(.fileWriteUnknown) }
         _ = try BackupIntegrity.verify(job.staged)
+        try AppBackupExport.validateSharedSleep(job.staged.appendingPathComponent("AppGroupContainer/SharedSleep",isDirectory:true))
         guard let app=AppDataLocations.appSupport,let group=AppDataLocations.groupContainer else { throw CocoaError(.fileNoSuchFile) }
         try fm.createDirectory(at:job.safety,withIntermediateDirectories:true)
         job.operations=[Operation(source:job.staged.appendingPathComponent("ApplicationSupport-Health"),destination:app,previous:job.safety.appendingPathComponent("ApplicationSupport"),hadPrevious:fm.fileExists(atPath:app.path))]
@@ -46,6 +61,8 @@ enum AppBackupRestore {
         let incoming=try fm.contentsOfDirectory(at:groupSource,includingPropertiesForKeys:nil).filter { !$0.lastPathComponent.hasPrefix(".com.apple.") }
         let existing=try fm.contentsOfDirectory(at:group,includingPropertiesForKeys:nil).filter { !$0.lastPathComponent.hasPrefix(".com.apple.") }
         for name in Set(incoming.map(\.lastPathComponent)+existing.map(\.lastPathComponent)).sorted() {
+            // Older full backups predate shared sleep. Their absence is not a deletion.
+            if name == "SharedSleep" && !incoming.contains(where: { $0.lastPathComponent == name }) { continue }
             let dest=group.appendingPathComponent(name)
             job.operations.append(Operation(source:groupSource.appendingPathComponent(name),destination:dest,previous:job.safety.appendingPathComponent("Group-"+name),hadPrevious:fm.fileExists(atPath:dest.path)))
         }

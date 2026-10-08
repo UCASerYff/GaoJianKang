@@ -44,6 +44,7 @@ struct TodayView: View {
             quick(.exercise,value:"\(number(today.filter{$0.kind == .exercise}.reduce(0){$0+$1.amount})) min",detail:store.t("步行也是日常运动","A walk counts, too")) { store.new(.exercise) }
             if !store.state.preferences.hideWeight { quick(.weight,value:today.first(where:{$0.kind == .weight}).map{ "\(number($0.amount)) kg" } ?? "— kg",detail:store.t("按自己的节奏记录","At your own pace")) { store.new(.weight) } }
         }
+        SleepSummaryCard()
         if store.state.preferences.gameEnabled {
             HStack(spacing:18) {
                 IslandPreview(island:store.state.island,en:store.en).frame(maxWidth:.infinity).frame(height:165)

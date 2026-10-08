@@ -31,10 +31,10 @@ struct SettingsView: View {
                 }.card()
                 VStack(alignment:.leading,spacing:16) {
                     Label(store.t("数据与备份","Data & backups"),systemImage:"externaldrive").font(.headline)
-                    Text(store.t("无需账号，没有云端同步。完整备份包含健康记录、模板与岛屿进度。","No account or cloud sync. A full backup includes records, templates and island progress.")).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
-                    HStack { Button(store.t("导出 CSV","Export CSV")) { store.exportCSV() }; Button(store.t("导入 CSV","Import CSV")) { store.importCSV() }; Button(store.t("完整备份","Full backup")) { store.backup() } }
+                    Text(store.t("无需账号，没有云端同步。本页的岛屿备份包含饮水、饮食、运动、体重、快速事项、模板与岛屿进度。共享睡眠请使用设置「数据」页的完整资料 ZIP 备份。","No account or cloud sync. Island backups on this page include health entries, templates and island progress. Use the full ZIP backup in Settings → Data to include shared sleep.")).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                    HStack { Button(store.t("导出 CSV","Export CSV")) { store.exportCSV() }; Button(store.t("导入 CSV","Import CSV")) { store.importCSV() }; Button(store.t("岛屿与健康备份","Island & health backup")) { store.backup() } }
                     HStack { Button(store.t("恢复备份","Restore backup")) { store.restore() }; Button(store.t("自动备份目录","Automatic backups")) { store.openBackups() } }
-                    Text(store.t("每日首次成功写入后备份，保留最近 7 份。CSV 供阅读，完整恢复请使用 .healthbackup。导入仅识别本应用导出的 CSV，按 id 去重，不补发岛屿奖励。","A daily backup after the first successful write; latest 7 retained. Use .healthbackup for complete restoration. Import accepts only CSVs exported by this app; duplicates by id are skipped and imports grant no island rewards.")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                    Text(store.t("每日首次成功写入后备份，保留最近 7 份。CSV 供阅读，共享睡眠不在 .healthbackup 中，完整迁移请使用资料 ZIP 备份。导入仅识别本应用导出的 CSV，按 id 去重，不补发岛屿奖励。","A daily backup after the first successful write; latest 7 retained. Shared sleep is separate from .healthbackup; use a full ZIP for migration. Import accepts only CSVs exported by this app; duplicates by id are skipped and imports grant no island rewards.")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     Divider()
                     Button(store.t("重置岛屿（保留健康记录）","Reset island (keep records)"),role:.destructive) { store.reset(all:false) }
                     Button(store.t("删除全部数据与自动备份","Delete all data and local backups"),role:.destructive) { store.reset(all:true) }

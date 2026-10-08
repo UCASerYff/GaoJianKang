@@ -44,7 +44,7 @@ import Health
         .defaultSize(width:1380,height:860)
         .handlesExternalEvents(matching:["*"])
         .commands {
-            CommandGroup(after:.newItem) { Button("记录饮食") {post("GaoSeries.health.new")}.keyboardShortcut("n");Button("喝水") {post("GaoSeries.health.water")} }
+            CommandGroup(after:.newItem) { Button("记录饮食") {post("GaoSeries.health.new")}.keyboardShortcut("n");Button("喝水") {post("GaoSeries.health.water")};Button("记录睡眠") {post("GaoSeries.health.sleep")} }
             CommandMenu("数据") {
                 Button("导出模块备份…") { post("GaoSeries.health.export") }
                 Button("恢复模块备份…") { post("GaoSeries.health.import") }

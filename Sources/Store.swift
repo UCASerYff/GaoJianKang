@@ -14,6 +14,12 @@ import UniformTypeIdentifiers
     @Published var undoEvent: HealthEvent?
     @Published var undoEventWasCreation = false
     @Published var undoWasCreation = false
+    @Published var sleepRecords: [SharedSleepEntry] = []
+    @Published var sleepSyncError: String?
+    @Published var sleepEditor = false
+    @Published var sleepSyncedAt: Date?
+    private var sleepDatabase: SharedSleepStore?
+    private var sleepRefreshTimer: Timer?
     private var db: HealthDatabase?
     /// app 级语言（gqns.language）变化时推动界面重渲染；en 直读解析器，不依赖本字段取值。
     @Published private var languageRevision = 0
@@ -28,6 +34,12 @@ import UniformTypeIdentifiers
             Task { @MainActor in self?.syncSleepRewards() }
         }
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("GaoSeries.rhythm.sleepSaved"), object:nil, queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.syncSleepRewards() }
+        }
+        DistributedNotificationCenter.default().addObserver(forName: SharedSleepStore.changedNotification, object:nil, queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.syncSleepRewards() }
+        }
+        sleepRefreshTimer = Timer.scheduledTimer(withTimeInterval:15,repeats:true) { [weak self] _ in
             Task { @MainActor in self?.syncSleepRewards() }
         }
         reload()
@@ -128,17 +140,18 @@ import UniformTypeIdentifiers
     func upgrade(_ id: String) { if update({ try Engine.upgrade(&$0,id:id,now:Date()) }) { notice=t("设施已升级，岛上的样貌和收益也变了。","Building upgraded, with a new look and stronger benefits.") } }
     func expandIsland() { if update({ try Engine.expand(&$0,now:Date()) }) { notice=t("海岸已扩建，岛屿更宽阔了。","Your island has a wider shore now.") } }
     func syncSleepRewards() {
-        struct SleepFile: Decodable {
-            struct Entry: Decodable { let id: String; let endedAt: Date; let durationSeconds: Double }
-            let sleepRecords: [Entry]
-        }
-        let base = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask).first!
-        let main = base.appendingPathComponent("GaoSeries/Rhythm/library.json")
-        let mirror = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:"5G96498KGJ.com.gaojiezou.rhythm")?.appendingPathComponent("library.json")
-        guard let data = (try? Data(contentsOf:main)) ?? mirror.flatMap({ try? Data(contentsOf:$0) }),
-              let entries = try? JSONDecoder().decode(SleepFile.self,from:data).sleepRecords else { return }
+        guard fatalError == nil, db != nil else { return }
+        do {
+            let shared = try sharedSleeps()
+            // Import existing records by ID without rewriting the Rhythm library.
+            // A corrupt/unreadable library is an error, never an empty replacement.
+            try HealthSleepImport.migrateLegacy(to:shared)
+            sleepRecords = try shared.records()
+            sleepSyncError = nil
+            sleepSyncedAt = Date()
+        } catch { sleepSyncError = error.localizedDescription; return }
         let now = Date()
-        let rewards = entries.map { Engine.SleepReward(id:$0.id,endedAt:$0.endedAt,durationSeconds:$0.durationSeconds) }
+        let rewards = sleepRecords.map { Engine.SleepReward(id:$0.id,endedAt:$0.endedAt,durationSeconds:$0.durationSeconds) }
         guard !Engine.eligibleSleep(state,records:rewards,now:now).isEmpty else { return }
         let before=state.ledgers[Engine.day(now,state),default:DailyLedger()].sleepEnergy
         if update({ Engine.rewardSleep(&$0,records:rewards,now:now) }) {
@@ -146,6 +159,31 @@ import UniformTypeIdentifiers
             NotificationCenter.default.post(name:Notification.Name("GaoSeries.health.sleepReward"),object:nil,userInfo:["energy":gained,"paused":state.island.paused])
             DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.health.sleepReward"),object:nil,userInfo:["energy":gained,"paused":state.island.paused],deliverImmediately:true)
         }
+    }
+    private func sharedSleeps() throws -> SharedSleepStore {
+        if let sleepDatabase { return sleepDatabase }
+        let result = try SharedSleepStore()
+        sleepDatabase = result
+        return result
+    }
+    @discardableResult func addSleep(start: Date, end: Date) -> Bool {
+        do {
+            let record = try HealthSleepImport.manual(start:start,end:end)
+            let shared = try sharedSleeps()
+            try HealthSleepImport.migrateLegacy(to:shared)
+            try shared.upsert(record)
+            sleepEditor = false
+            syncSleepRewards()
+            notice = t("睡眠已保存，搞节奏会自动同步；无需重复记录。","Sleep saved. Rhythm syncs automatically; no second entry needed.")
+            return true
+        } catch { message = error.localizedDescription; return false }
+    }
+    func removeSleep(_ record: SharedSleepEntry) {
+        do {
+            try sharedSleeps().remove(record.id)
+            syncSleepRewards()
+            notice = t("睡眠记录已从两边删除，已获得的游戏奖励保留。","Sleep deleted from both apps. Earned game rewards are retained.")
+        } catch { message = error.localizedDescription }
     }
     func preferences(_ op: (inout Preferences)->Void) {
         _ = update { s in Engine.settle(&s,now:Date()); op(&s.preferences); s.island.lastSettled=Date(); s.island.lastVisit=Date() }

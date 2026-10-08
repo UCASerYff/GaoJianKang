@@ -64,7 +64,7 @@ struct DataSettings:View {
         Task { do {
             let (staged,manifest)=try await Task.detached {try AppBackupRestore.prepare(url)}.value
             busy=false
-            let alert=NSAlert();alert.messageText="恢复这份完整资料？";alert.informativeText="已核验 \(manifest.files.count) 个文件。应用将在下次启动时恢复，当前数据会保留为安全副本。";alert.addButton(withTitle:"恢复并退出");alert.addButton(withTitle:"取消")
+            let alert=NSAlert();alert.messageText="恢复这份完整资料？";alert.informativeText="已核验 \(manifest.files.count) 个文件。应用将在下次启动时恢复，当前数据会保留为安全副本。备份若包含共享睡眠，将同时恢复搞节奏中的睡眠记录，请先退出搞节奏；旧备份不改动现有共享睡眠。";alert.addButton(withTitle:"恢复并退出");alert.addButton(withTitle:"取消")
             if alert.runModal() == .alertFirstButtonReturn { try AppBackupRestore.schedule(staged);NSApp.terminate(nil) }
             else {try? FileManager.default.removeItem(at:staged);status="已取消"}
         } catch {busy=false;status="恢复未完成：\(error.localizedDescription)"} }

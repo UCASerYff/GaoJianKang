@@ -36,7 +36,7 @@ struct IslandView: View {
                     conversion(store.t("运动 → 活力","Activity"),ledger.activity,Double(18+max(0,island.buildingLevel("training")-1)*3),"bolt.fill",Theme.green)
                     conversion(store.t("睡眠 → 活力","Sleep"),ledger.sleepEnergy,24,"moon.stars.fill",Theme.purple)
                 }
-                Text(store.t("搞节奏完成睡眠后自动恢复活力：每小时 +3，每日最多 +24；最近 36 小时的记录可补领一次。","Completed sleep in Rhythm restores 3 energy per hour, up to 24 per day. Records from the last 36 hours can be claimed once.")).font(.caption).foregroundStyle(.secondary)
+                Text(store.t("在搞健康或搞节奏记录睡眠后自动恢复活力：每小时 +3，每日最多 +24；最近 36 小时的记录可补领一次。","Sleep recorded in Health or Rhythm restores 3 energy per hour, up to 24 per day. Records from the last 36 hours can be claimed once.")).font(.caption).foregroundStyle(.secondary)
             }.card()
             LazyVGrid(columns:[GridItem(.adaptive(minimum:150),spacing:12)],spacing:12) {
                 ForEach(Catalog.materials,id:\.self) { key in
