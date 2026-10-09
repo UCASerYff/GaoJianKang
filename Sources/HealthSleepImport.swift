@@ -33,6 +33,20 @@ enum HealthSleepImport {
         catch { throw HealthError("睡眠同步暂未完成，原始记录已保留。请检查搞节奏资料库后重试。 / Sleep sync failed; original records are retained. Check the Rhythm library and retry.") }
     }
 
+    static func durationMinutes(hours: Int, minutes: Int) -> Int? {
+        guard (0...24).contains(hours), (0...59).contains(minutes) else { return nil }
+        let total = hours * 60 + minutes
+        return (30...1440).contains(total) ? total : nil
+    }
+
+    /// Match Rhythm's duration entry: the selected night wakes at 07:00 the next day.
+    static func manualInterval(night: Date, durationMinutes: Int, calendar: Calendar = .current) -> (start: Date, end: Date) {
+        let nightStart = calendar.startOfDay(for:night)
+        let wakeDay = calendar.date(byAdding:.day,value:1,to:nightStart) ?? nightStart
+        let end = calendar.date(bySettingHour:7,minute:0,second:0,of:wakeDay) ?? wakeDay
+        return (calendar.date(byAdding:.minute,value:-durationMinutes,to:end) ?? end,end)
+    }
+
     static func manual(start: Date, end: Date, now: Date = Date()) throws -> SharedSleepEntry {
         let duration = end.timeIntervalSince(start)
         guard start.timeIntervalSinceReferenceDate.isFinite, end.timeIntervalSinceReferenceDate.isFinite,

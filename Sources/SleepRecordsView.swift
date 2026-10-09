@@ -9,7 +9,8 @@ struct SleepRecordsView: View {
             SectionTitle(title:store.t("睡眠记录","Sleep records"),subtitle:store.t("在搞健康或搞节奏记一次，两边自动显示。","Record once in Health or Rhythm. Both apps stay in sync."))
             Spacer()
             Button { store.syncSleepRewards() } label:{ Label(store.t("同步记录","Sync records"),systemImage:"arrow.triangle.2.circlepath") }
-            Button { store.sleepEditor = true } label:{ Label(store.t("记录睡眠","Record sleep"),systemImage:"plus") }.buttonStyle(.borderedProminent).tint(Theme.purple)
+            Button { store.newSleep(backfill:true) } label:{ Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
+            Button { store.newSleep() } label:{ Label(store.t("记录睡眠","Record sleep"),systemImage:"plus") }.buttonStyle(.borderedProminent).tint(Theme.purple)
         }
         SleepSummaryCard()
         VStack(alignment:.leading,spacing:10) {
@@ -25,7 +26,7 @@ struct SleepRecordsView: View {
         VStack(alignment:.leading,spacing:0) {
             HStack { Text(store.t("睡眠历史","Sleep history")).font(.headline); Spacer(); Text(store.t("共 \(store.sleepRecords.count) 条","\(store.sleepRecords.count) records")).font(.caption).foregroundStyle(.secondary) }.padding(.bottom,12)
             if store.sleepRecords.isEmpty {
-                EmptyCard(symbol:"moon.zzz.fill",title:store.t("记录一个安稳的夜晚","A place for your nights"),detail:store.t("补记就寝和起床时间，也会自动显示在搞节奏中。","Enter bedtime and wake-up time. It will appear in Rhythm automatically."))
+                EmptyCard(symbol:"moon.zzz.fill",title:store.t("记录一个安稳的夜晚","A place for your nights"),detail:store.t("填写睡眠小时、分钟并选择哪晚，也会自动显示在搞节奏中。","Enter sleep hours and minutes, then choose the night. It will appear in Rhythm automatically."))
             }
             ForEach(Array(store.sleepRecords.prefix(visibleCount))) { record in
                 HStack(spacing:14) {
@@ -64,7 +65,7 @@ struct SleepSummaryCard: View {
             }
             Spacer()
             Text(today.isEmpty ? "—" : sleepDuration(today.reduce(0) { $0+$1.durationSeconds },en:store.en)).font(.title2.monospacedDigit().weight(.semibold))
-            Button(store.t("记录睡眠","Record sleep")) { store.sleepEditor = true }.tint(Theme.purple)
+            Button(store.t("记录睡眠","Record sleep")) { store.newSleep() }.tint(Theme.purple)
             if store.selectedTab != 10 { Button(store.t("查看记录","View records")) { store.selectedTab = 10 } }
         }.card()
     }
@@ -73,19 +74,39 @@ struct SleepSummaryCard: View {
 struct SleepRecordEditor: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @State private var startedAt = Date().addingTimeInterval(-8*3600)
-    @State private var endedAt = Date()
-    private var valid: Bool { (1800...86400).contains(endedAt.timeIntervalSince(startedAt)) && endedAt <= Date() }
+    @State private var hours = 8
+    @State private var minutes = 0
+    @State private var night = Calendar.current.date(byAdding:.day,value:-1,to:Calendar.current.startOfDay(for:Date())) ?? Date()
+    private var durationMinutes: Int? { HealthSleepImport.durationMinutes(hours:hours,minutes:minutes) }
+    private var interval: (start: Date,end: Date) { HealthSleepImport.manualInterval(night:night,durationMinutes:durationMinutes ?? 0) }
+    private var valid: Bool { durationMinutes != nil && interval.end <= Date() }
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
-            Label(store.t("记录睡眠","Record sleep"),systemImage:"moon.stars.fill").font(.title2.weight(.semibold)).foregroundStyle(Theme.purple)
-            Text(store.t("填写已经结束的睡眠，两边只需记录一次。","Enter completed sleep once for both apps.")).foregroundStyle(.secondary)
-            DatePicker(store.t("就寝时间","Bedtime"),selection:$startedAt,in:...Date(),displayedComponents:[.date,.hourAndMinute])
-            DatePicker(store.t("起床时间","Wake-up time"),selection:$endedAt,in:...Date(),displayedComponents:[.date,.hourAndMinute])
-            Text(valid ? sleepDuration(endedAt.timeIntervalSince(startedAt),en:store.en) : store.t("就寝须早于起床，时长 30 分钟至 24 小时。","Bedtime must precede waking by 30 minutes to 24 hours.")).font(.callout).foregroundStyle(valid ? Theme.purple : Theme.orange)
+            Label(store.t(store.sleepBackfill ? "补记睡眠" : "记录睡眠",store.sleepBackfill ? "Backfill sleep" : "Record sleep"),systemImage:"moon.stars.fill").font(.title2.weight(.semibold)).foregroundStyle(Theme.purple)
+            Text(store.t("和搞节奏一样，填写睡了几小时几分钟，两边只需记录一次。","Enter hours and minutes, just like Rhythm. Record once for both apps.")).foregroundStyle(.secondary)
+            HStack(spacing:10) {
+                Text(store.t("睡眠时长","Sleep duration"))
+                Spacer()
+                TextField("",value:$hours,format:.number).textFieldStyle(.roundedBorder).frame(width:64).multilineTextAlignment(.trailing).accessibilityLabel(store.t("睡眠小时","Sleep hours"))
+                Text(store.t("小时","hours"))
+                TextField("",value:$minutes,format:.number).textFieldStyle(.roundedBorder).frame(width:64).multilineTextAlignment(.trailing).accessibilityLabel(store.t("睡眠分钟","Sleep minutes"))
+                Text(store.t("分钟","minutes"))
+            }
+            HStack {
+                DatePicker(store.t("哪晚（就寝日期）","Which night (bedtime date)"),selection:$night,in:...Date(),displayedComponents:[.date]).datePickerStyle(.field)
+                Button(store.t("昨晚","Last night")) { night = Calendar.current.date(byAdding:.day,value:-1,to:Calendar.current.startOfDay(for:Date())) ?? Date() }
+            }
+            if let durationMinutes {
+                Text(sleepDuration(Double(durationMinutes)*60,en:store.en)).font(.title3.weight(.semibold)).foregroundStyle(Theme.purple)
+                Text("\(interval.start.formatted(date:.abbreviated,time:.shortened)) → \(interval.end.formatted(date:.abbreviated,time:.shortened))").font(.callout).foregroundStyle(.secondary)
+                if interval.end > Date() { Text(store.t("这晚的起床时间尚未到，请选择已结束的睡眠。","This night's wake-up time is still in the future. Choose completed sleep.")).font(.callout).foregroundStyle(Theme.orange) }
+            } else {
+                Text(store.t("小时为 0–24，分钟为 0–59，总时长为 30 分钟至 24 小时。","Enter 0–24 hours and 0–59 minutes, totaling 30 minutes to 24 hours.")).font(.callout).foregroundStyle(Theme.orange)
+            }
+            Text(store.t("起床时间按次日早上 7:00 固定换算；选择昨天或更早的日期即可补记。搞节奏按所选那晚统计，搞健康的今日睡眠按起床日期统计。","Wake-up is set to 07:00 the next day. Choose yesterday or an earlier date to backfill. Rhythm groups by the selected night; Health's daily sleep card groups by wake-up date.")).font(.caption).foregroundStyle(.secondary)
             Text(store.t("保存后自动同步。近期有效睡眠按每小时 3 点恢复岛屿活力，每日最多 24 点。","Automatically syncs on save. Recent eligible sleep restores 3 island energy per hour, up to 24 per day.")).font(.caption).foregroundStyle(.secondary)
-            HStack { Spacer(); Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Button(store.t("保存并同步","Save and sync")) { _ = store.addSleep(start:startedAt,end:endedAt) }.buttonStyle(.borderedProminent).tint(Theme.purple).disabled(!valid).keyboardShortcut(.defaultAction) }
-        }.padding(28).frame(width:480)
+            HStack { Spacer(); Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Button(store.t("保存并同步","Save and sync")) { _ = store.addSleep(start:interval.start,end:interval.end) }.buttonStyle(.borderedProminent).tint(Theme.purple).disabled(!valid).keyboardShortcut(.defaultAction) }
+        }.padding(28).frame(width:540)
     }
 }
 

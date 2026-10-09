@@ -34,7 +34,7 @@ struct TodayView: View {
                 Button { store.preferences { $0.onboarding=true } } label:{ Image(systemName:"xmark") }.buttonStyle(.plain)
             }.card()
         }
-        HStack { Text(store.t("今日记录","Today’s records")).font(.title3.weight(.semibold)); Spacer(); Text(store.t("只记录事实，不给自己打分","A journal, not a scorecard")).font(.caption).foregroundStyle(.secondary) }
+        HStack { Text(store.t("今日记录","Today’s records")).font(.title3.weight(.semibold)); Spacer(); BackfillRecordMenu(); Text(store.t("只记录事实，不给自己打分","A journal, not a scorecard")).font(.caption).foregroundStyle(.secondary) }
         HStack(spacing:14) {
             let waterTotal=today.filter{$0.kind == .water}.reduce(0){$0+$1.amount}
             let goal=store.state.preferences.config(Engine.day(Date(),store.state)).waterGoal
@@ -122,6 +122,8 @@ struct RecordsView: View {
     var body: some View {
         SectionTitle(title:heading,subtitle:store.t("每一笔都可以补记、更正或删除。","Add, edit or remove any entry. Your journal belongs to you."))
         HStack {
+            Button { store.new(kind,backfill:true) } label: { Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
+            Button { store.new(kind) } label: { Label(store.t("记一笔","Record"),systemImage:"plus") }
             Spacer()
             TextField(store.t("搜索名称或备注","Search names or notes"),text:$query).textFieldStyle(.roundedBorder).frame(width:200)
             Picker("",selection:$range) { Text(store.t("近 7 天","7 days")).tag(7); Text(store.t("近 30 天","30 days")).tag(30); Text(store.t("全部时间","All time")).tag(0) }.frame(width:130)
@@ -132,5 +134,17 @@ struct RecordsView: View {
         }.card(12)
         GQHistoryPager(page:$page,count:results.count).onChange(of:query) { _,_ in page=0 }.onChange(of:range) { _,_ in page=0 }.onChange(of:kind) { _,_ in page=0 }
         Text(store.t("共 \(results.count) 条记录 · 编辑不会回退已获得的岛屿成果","\(results.count) records · Editing never removes island progress")).font(.caption).foregroundStyle(.secondary)
+    }
+}
+
+struct BackfillRecordMenu: View {
+    @EnvironmentObject var store: AppStore
+    var body: some View {
+        Menu {
+            Button(store.t("睡眠记录","Sleep")) { store.newSleep(backfill:true) }
+            ForEach(RecordKind.allCases) { kind in Button(kind.title(store.en)) { store.new(kind,backfill:true) } }
+            Button(store.t("快速事项","Quick events")) { store.selectedTab = 5 }
+        } label: { Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
+        .help(store.t("补记昨天或更早的记录","Record yesterday or an earlier date"))
     }
 }

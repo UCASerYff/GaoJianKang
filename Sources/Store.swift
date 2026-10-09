@@ -17,6 +17,7 @@ import UniformTypeIdentifiers
     @Published var sleepRecords: [SharedSleepEntry] = []
     @Published var sleepSyncError: String?
     @Published var sleepEditor = false
+    @Published var sleepBackfill = false
     @Published var sleepSyncedAt: Date?
     private var sleepDatabase: SharedSleepStore?
     private var sleepRefreshTimer: Timer?
@@ -67,15 +68,21 @@ import UniformTypeIdentifiers
         } catch { message = error.localizedDescription; return false }
     }
     func welcome() { _ = update { Engine.visit(&$0,now:Date(),welcome:true) } }
-    func new(_ kind: RecordKind) {
+    func new(_ kind: RecordKind, backfill: Bool = false) {
         var r = HealthRecord(kind:kind)
+        if backfill { r.occurredAt = Engine.calendar(state).date(byAdding:.day,value:-1,to:r.occurredAt) ?? r.occurredAt }
+        r.timezone = state.preferences.timezone
         switch kind {
         case .water: r.amount = state.preferences.cup
-        case .meal: r.amount = 1; r.mealSource = .canteen; r.fullnessPercent = 75; let hour=Engine.calendar(state).component(.hour,from:Date()); r.slot = min(hour<11 ? 0 : hour<16 ? 1 : 2,state.preferences.config(Engine.day(Date(),state)).slots-1)
+        case .meal: r.amount = 1; r.mealSource = .canteen; r.fullnessPercent = 75; let hour=Engine.calendar(state).component(.hour,from:r.occurredAt); r.slot = min(hour<11 ? 0 : hour<16 ? 1 : 2,state.preferences.config(Engine.day(r.occurredAt,state)).slots-1)
         case .exercise: r.amount=30; r.title=t("步行","Walking")
         case .weight: r.amount=state.records.filter { $0.kind == .weight }.max(by:{ $0.occurredAt<$1.occurredAt })?.amount ?? 60
         }
         editor = r
+    }
+    func newSleep(backfill: Bool = false) {
+        sleepBackfill = backfill
+        sleepEditor = true
     }
     func addWater() {
         var r = HealthRecord(kind:.water); r.amount=state.preferences.cup

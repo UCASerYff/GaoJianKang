@@ -64,7 +64,11 @@ struct ContentView: View {
             }
             toolbarItemNoChrome(.primaryAction) {
                 HStack(spacing:12) {
-                    Menu { Button(store.t("睡眠记录","Sleep")) { store.sleepEditor = true }; ForEach(RecordKind.allCases) { kind in Button(kind.title(store.en)) { store.new(kind) } } } label: { Label(store.t("记一笔","Record"),systemImage:"plus") }
+                    Menu {
+                        Button(store.t("睡眠记录","Sleep")) { store.newSleep() }
+                        ForEach(RecordKind.allCases) { kind in Button(kind.title(store.en)) { store.new(kind) } }
+                    } label: { Label(store.t("记一笔","Record"),systemImage:"plus") }
+                    BackfillRecordMenu()
                 }
                 .frame(width:360,alignment:.trailing)
             }

@@ -4,6 +4,8 @@ struct RecordEditor: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
     @State var record: HealthRecord
+    var startInBackfill = false
+    @State private var isBackfill = false
     @State private var amount=""
     @State private var calories=""
     @State private var mealSource: MealSource? = .canteen
@@ -13,11 +15,11 @@ struct RecordEditor: View {
     var existing: Bool { store.state.records.contains{$0.id==record.id} }
     var body: some View {
         VStack(spacing:0) {
-            HStack { SymbolTile(symbol:record.kind.symbol,color:Theme.color(record.kind)); VStack(alignment:.leading,spacing:4) { Text((existing ? store.t("编辑","Edit ") : store.t("记录","Record "))+record.kind.title(store.en)).font(.title2.weight(.semibold)); Text(store.t("真实记录就好，留空也没关系。","Just the facts. Optional fields can stay empty.")).font(.caption).foregroundStyle(.secondary) }; Spacer(); Button { dismiss() } label:{Image(systemName:"xmark")}.buttonStyle(.plain) }.padding(24)
+            HStack { SymbolTile(symbol:record.kind.symbol,color:Theme.color(record.kind)); VStack(alignment:.leading,spacing:4) { Text((existing ? store.t("编辑","Edit ") : isBackfill ? store.t("补记","Past entry: ") : store.t("记录","Record "))+record.kind.title(store.en)).font(.title2.weight(.semibold)); Text(store.t("真实记录就好，留空也没关系。","Just the facts. Optional fields can stay empty.")).font(.caption).foregroundStyle(.secondary) }; Spacer(); Button { dismiss() } label:{Image(systemName:"xmark")}.buttonStyle(.plain) }.padding(24)
             Divider()
             ScrollView {
                 VStack(alignment:.leading,spacing:18) {
-                    HStack { DatePicker(store.t("发生时间","When"),selection:$record.occurredAt,in:...Date()); Spacer(); Button(store.t("昨天","Yesterday")) { record.occurredAt=Calendar.current.date(byAdding:.day,value:-1,to:Date())! }; Button(store.t("今天","Today")) { record.occurredAt=Date() } }
+                    HealthRecordTimeFields(occurredAt:$record.occurredAt,isBackfill:$isBackfill,isEditing:existing,calendar:Engine.calendar(store.state),en:store.en)
                     if record.kind == .meal {
                         let slots=store.state.preferences.config(Engine.day(record.occurredAt,store.state)).slots
                         Picker(store.t("餐别","Meal slot"),selection:$record.slot) {
@@ -60,6 +62,7 @@ struct RecordEditor: View {
             HStack { Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button(existing ? store.t("保存修改","Save changes") : store.t("保存记录","Save record")) { submit() }.buttonStyle(.borderedProminent).tint(Theme.teal).keyboardShortcut(.defaultAction) }.padding(20)
         }.frame(minWidth:560,idealWidth:600,maxWidth:720,minHeight:480,idealHeight:record.kind == .meal ? 530 : 520)
         .onAppear {
+            isBackfill=existing || startInBackfill || !Engine.calendar(store.state).isDate(record.occurredAt,inSameDayAs:Date())
             amount=number(record.amount)
             calories=record.calories.map(number) ?? ""
             mealSource=record.mealSource
@@ -76,6 +79,7 @@ struct RecordEditor: View {
             guard let n=Double(v.replacingOccurrences(of:",",with:".")),n.isFinite,n>=0 else { throw HealthError(store.t("请输入有效的非负数字，或留空。","Enter a non-negative number or leave blank.")) }; return n
         }
         do {
+            if !existing && !isBackfill { record.occurredAt=Date() }
             if record.kind == .meal {
                 record.mealSource=mealSource
                 record.fullnessPercent=Int(fullness)
@@ -88,5 +92,57 @@ struct RecordEditor: View {
             if record.kind == .exercise && record.title.isEmpty { record.title=store.t("运动","Activity") }
             try Engine.validateRecord(record,now:Date()); store.save(record,template:template)
         } catch { validation=error.localizedDescription }
+    }
+}
+
+/// Reused by health records and quick events. Merely opening an editor never
+/// rewrites its timestamp; only an explicit shortcut or a new immediate save does.
+struct HealthRecordTimeFields: View {
+    @Binding var occurredAt: Date
+    @Binding var isBackfill: Bool
+    let isEditing: Bool
+    let calendar: Calendar
+    let en: Bool
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            if !isEditing {
+                Picker(en ? "Entry time" : "记录方式",selection:$isBackfill) {
+                    Text(en ? "Record now" : "即时记录").tag(false)
+                    Text(en ? "Past entry" : "补记").tag(true)
+                }.pickerStyle(.segmented)
+            }
+            if isBackfill || isEditing {
+                HStack {
+                    Label(en ? "Choose date and time" : "选择日期与时间",systemImage:"calendar.badge.clock").font(.subheadline.weight(.medium))
+                    Spacer()
+                    Button(en ? "Yesterday" : "昨天") { selectDay(-1) }
+                    Button(en ? "Today" : "今天") { selectDay(0) }
+                }
+                DatePicker(en ? "Occurred at" : "实际发生时间",selection:$occurredAt,in:...Date(),displayedComponents:[.date,.hourAndMinute])
+                    .environment(\.calendar,calendar).environment(\.timeZone,calendar.timeZone)
+                Text(en ? "Saved under the selected date, including entries from earlier today." : "按实际发生日期归档；今天早些时候的记录也可以补记。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Label(en ? "Use the time when saved" : "使用保存时的当前时间",systemImage:"clock").font(.subheadline)
+                    Spacer()
+                    Button(en ? "Yesterday" : "补记昨天") { selectDay(-1) }
+                }
+                Button(en ? "Choose an earlier date and time…" : "选择日期补记…") { isBackfill=true }
+                    .buttonStyle(.link)
+            }
+        }
+        .onChange(of:isBackfill) { _,past in
+            if !past && !isEditing { occurredAt=Date() }
+        }
+    }
+
+    private func selectDay(_ offset:Int) {
+        isBackfill=true
+        let now=Date()
+        let target=calendar.date(byAdding:.day,value:offset,to:now) ?? now
+        let time=calendar.dateComponents([.hour,.minute,.second],from:occurredAt)
+        occurredAt=min(calendar.date(bySettingHour:time.hour ?? 12,minute:time.minute ?? 0,second:time.second ?? 0,of:target) ?? target,now)
     }
 }

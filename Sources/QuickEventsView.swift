@@ -14,6 +14,7 @@ struct QuickEventsView: View {
     @State private var selectedDay: Date?
     @State private var typeEditor: HealthEventType?
     @State private var eventEditor: HealthEvent?
+    @State private var eventStartsInBackfill = false
     @State private var showArchived = false
     private var types: [HealthEventType] { store.state.eventTypes.filter { !$0.archived } }
     private var days: [EventDay] { EventLog.month(month,state:store.state,type:filter) }
@@ -33,7 +34,7 @@ struct QuickEventsView: View {
             Spacer()
             Button { typeEditor=HealthEventType(name:"") } label: { Label(store.t("自定义事项","New event type"),systemImage:"plus") }.buttonStyle(.borderedProminent).tint(Theme.blue)
         }
-        LazyVGrid(columns:[GridItem(.adaptive(minimum:165),spacing:12)],spacing:12) {
+        LazyVGrid(columns:[GridItem(.adaptive(minimum:190),spacing:12)],spacing:12) {
             ForEach(types) { type in quickCard(type) }
         }
         if types.isEmpty { Text(store.t("添加一个事项，或者在下方恢复已停用事项。","Add a type or restore an archived type below.")).foregroundStyle(.secondary) }
@@ -70,7 +71,7 @@ struct QuickEventsView: View {
             if selectedDay != nil { Button(store.t("显示整月","Show month")) { selectedDay=nil }.buttonStyle(.link) }
             Spacer()
             Menu(store.t("补记事项","Add past entry")) {
-                ForEach(types) { type in var entry=HealthEvent(typeID:type.id); Button(type.title(store.en)) { entry.occurredAt=min(selectedDay ?? Date(),Date()); eventEditor=entry } }
+                ForEach(types) { type in Button(type.title(store.en)) { beginBackfill(type) } }
             }.disabled(types.isEmpty)
         }
         if entries.isEmpty { EmptyCard(symbol:"square.grid.3x3",title:store.t("还没有记录","No entries yet"),detail:store.t("点击上方事项记一次，颜色会随当天次数加深。","Tap an event above. More entries make the day darker.")) }
@@ -88,7 +89,7 @@ struct QuickEventsView: View {
                         }
                         Spacer()
                         Text("×\(event.count)").monospacedDigit()
-                        Button { eventEditor=event } label: { Image(systemName:"pencil") }.help(store.t("编辑","Edit"))
+                        Button { eventStartsInBackfill=false;eventEditor=event } label: { Image(systemName:"pencil") }.help(store.t("编辑","Edit"))
                         Button { store.removeEvent(event) } label: { Image(systemName:"trash") }.help(store.t("删除，可撤销","Delete; undo available"))
                     }.padding(.vertical,12)
                     if event.id != entries.last?.id { Divider() }
@@ -102,7 +103,7 @@ struct QuickEventsView: View {
             Text(store.t("停用仅隐藏快捷按钮，历史记录始终保留。","Archiving hides the shortcut and keeps all history.")).font(.caption).foregroundStyle(.secondary)
         }.card()
         .sheet(item:$typeEditor) { type in EventTypeEditor(type:type).environmentObject(store) }
-        .sheet(item:$eventEditor) { event in EventEntryEditor(event:event).environmentObject(store) }
+        .sheet(item:$eventEditor) { event in EventEntryEditor(event:event,startInBackfill:eventStartsInBackfill).environmentObject(store) }
     }
     private func shift(_ amount: Int) { month=Engine.calendar(store.state).date(byAdding:.month,value:amount,to:month) ?? month; selectedDay=nil }
     private func quickCard(_ type: HealthEventType) -> some View {
@@ -110,12 +111,28 @@ struct QuickEventsView: View {
         return VStack(alignment:.leading,spacing:12) {
             HStack { Image(systemName:type.symbol).font(.title3).foregroundStyle(type.tint); Spacer(); Menu {
                 Button(store.t("编辑事项","Edit type")) { typeEditor=type }
-                Button(store.t("补记","Add past entry")) { eventEditor=HealthEvent(typeID:type.id) }
+                Button(store.t("补记","Add past entry")) { beginBackfill(type) }
                 Button(store.t("停用（保留记录）","Archive (keep history)")) { var t=type; t.archived=true; _=store.update { try EventLog.saveType(&$0,t) } }
             } label: { Image(systemName:"ellipsis") }.menuStyle(.borderlessButton).fixedSize() }
             Text(type.title(store.en)).font(.headline).lineLimit(2)
-            HStack { Text(store.t("今日 \(count) 次","\(count) today")).font(.caption).foregroundStyle(.secondary); Spacer(); Button { store.logEvent(type) } label: { Text("+1").fontWeight(.semibold) }.buttonStyle(.borderedProminent).tint(type.tint).accessibilityLabel(store.t("记录","Log ")+type.title(store.en)) }
+            Text(store.t("今日 \(count) 次","\(count) today")).font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button { beginBackfill(type) } label: { Label(store.t("补记","Past entry"),systemImage:"calendar.badge.plus") }
+                    .buttonStyle(.bordered).accessibilityLabel(store.t("补记","Add past ")+type.title(store.en))
+                Spacer()
+                Button { store.logEvent(type) } label: { Text("+1").fontWeight(.semibold) }.buttonStyle(.borderedProminent).tint(type.tint).accessibilityLabel(store.t("记录","Log ")+type.title(store.en))
+            }
         }.card()
+    }
+    private func beginBackfill(_ type:HealthEventType) {
+        let now=Date(),cal=Engine.calendar(store.state)
+        let fallback=cal.date(byAdding:.day,value:-1,to:now) ?? now
+        let day=selectedDay.map { $0 <= now ? $0 : fallback } ?? fallback
+        let time=cal.dateComponents([.hour,.minute,.second],from:now)
+        var event=HealthEvent(typeID:type.id)
+        event.occurredAt=min(cal.date(bySettingHour:time.hour ?? 12,minute:time.minute ?? 0,second:time.second ?? 0,of:day) ?? day,now)
+        eventStartsInBackfill=true
+        eventEditor=event
     }
     private var calendar: some View {
         let cal=Engine.calendar(store.state)
@@ -164,18 +181,23 @@ struct EventEntryEditor: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State var event: HealthEvent
+    var startInBackfill = false
+    @State private var isBackfill = false
+    private var existing:Bool { store.state.events.contains { $0.id == event.id } }
     @State private var error: String?
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
-            Text(store.state.eventTypes.first { $0.id == event.typeID }?.title(store.en) ?? "").font(.title2.bold())
-            DatePicker(store.t("时间","Date"),selection:$event.occurredAt,in:...Date(),displayedComponents:[.date,.hourAndMinute])
+            Text((existing ? store.t("编辑","Edit ") : isBackfill ? store.t("补记","Past entry: ") : store.t("记录","Record "))+(store.state.eventTypes.first { $0.id == event.typeID }?.title(store.en) ?? "")).font(.title2.bold())
+            HealthRecordTimeFields(occurredAt:$event.occurredAt,isBackfill:$isBackfill,isEditing:existing,calendar:Engine.calendar(store.state),en:store.en)
             Stepper(store.t("次数：\(event.count)","Count: \(event.count)"),value:$event.count,in:1...999)
             TextField(store.t("备注（可选）","Note (optional)"),text:$event.note).textFieldStyle(.roundedBorder)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack { Spacer(); Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Button(store.t("保存","Save")) {
+                if !existing && !isBackfill { event.occurredAt=Date() }
                 var probe=store.state
                 do { try EventLog.save(&probe,event); if store.saveEvent(event) { dismiss() } } catch { self.error=error.localizedDescription }
             }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent) }
-        }.padding(28).frame(width:440)
+        }.padding(28).frame(width:500)
+        .onAppear { isBackfill=existing || startInBackfill || !Engine.calendar(store.state).isDate(event.occurredAt,inSameDayAs:Date()) }
     }
 }

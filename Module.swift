@@ -28,7 +28,7 @@ public struct HealthModuleView: View {
             .onChange(of: routeRevision) { _, _ in handleRoute() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.new"))) { _ in store.new(.meal) }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.water"))) { _ in store.addWater() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.sleep"))) { _ in store.sleepEditor = true }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.sleep"))) { _ in store.newSleep() }
             // 备份导出/恢复收拢到 app 级「数据」页：模块内入口已移除，能力经通知触发。
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.export"))) { _ in store.backup() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.import"))) { _ in store.restore() }
