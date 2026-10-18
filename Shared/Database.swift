@@ -14,8 +14,13 @@ struct BackupEnvelope: Codable {
 /// PRAGMA user_version 0 = legacy single-blob layout, 1 = split layout.
 final class HealthDatabase {
     static let groupID = "5G96498KGJ.com.gaoseries.GaoJianKang"
+    static let changedNotification = Notification.Name("GaoSeries.health.databaseChanged")
+    enum Access { case application, readOnlyExisting, readWriteExisting }
+    struct Snapshot { var state: HealthState; var revision: String }
     let directory: URL
     private var db: OpaquePointer?
+    private let access: Access
+    private let lock = NSRecursiveLock()
     static func location() throws -> URL {
         if let override = ProcessInfo.processInfo.environment["GAOJIANKANG_TEST_DIRECTORY"] {
             return URL(fileURLWithPath: override, isDirectory: true)
@@ -23,39 +28,59 @@ final class HealthDatabase {
         guard let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:groupID) else { throw HealthError("无法访问共享容器，请重新安装已签名版本 / Shared container unavailable") }
         return group.appendingPathComponent("Health",isDirectory:true)
     }
-    init(directory: URL? = nil) throws {
+    init(directory: URL? = nil, access: Access = .application) throws {
         self.directory = try directory ?? Self.location()
-        try FileManager.default.createDirectory(at:self.directory,withIntermediateDirectories:true)
+        self.access = access
         let url = self.directory.appendingPathComponent("health.sqlite")
-        guard sqlite3_open_v2(url.path,&db,SQLITE_OPEN_CREATE|SQLITE_OPEN_READWRITE|SQLITE_OPEN_FULLMUTEX,nil)==SQLITE_OK else { throw HealthError("无法打开本地数据库 / Cannot open database") }
-        sqlite3_busy_timeout(db,5000)
-        try execute("PRAGMA journal_mode=WAL")
-        try execute("PRAGMA synchronous=FULL")
-        try execute("CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), json BLOB NOT NULL)")
-        try execute("CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, kind TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
-        try execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, type_id TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
-        try execute("BEGIN IMMEDIATE")
+        let existed: Bool
         do {
-            var st: OpaquePointer?
-            guard sqlite3_prepare_v2(db,"SELECT count(*) FROM state",-1,&st,nil)==SQLITE_OK else { throw error() }
-            let count = sqlite3_step(st)==SQLITE_ROW ? sqlite3_column_int(st,0) : -1
-            sqlite3_finalize(st)
-            if count == 0 {
+            let attributes = try FileManager.default.attributesOfItem(atPath:url.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else { throw HealthError("数据库路径无效 / Invalid database path") }
+            existed = true
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile { existed = false }
+        guard existed || access == .application else { throw HealthError("健康资料库缺失，未创建空白资料 / Health database missing; no empty replacement was created") }
+        if !existed {
+            // A missing database beside backups or an initialization marker is lost
+            // data, not a first launch. Only a truly empty location may initialize.
+            if FileManager.default.fileExists(atPath:self.directory.path) {
+                guard try FileManager.default.contentsOfDirectory(atPath:self.directory.path).isEmpty else { throw HealthError("原健康资料库缺失，请从备份恢复 / Existing health database missing; restore a backup") }
+            }
+            try FileManager.default.createDirectory(at:self.directory,withIntermediateDirectories:true)
+        }
+        let flags = (access == .readOnlyExisting ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX | (existed ? 0 : SQLITE_OPEN_CREATE)
+        do {
+            guard sqlite3_open_v2(url.path,&db,flags,nil)==SQLITE_OK else { throw HealthError("无法打开本地数据库 / Cannot open database") }
+            sqlite3_busy_timeout(db,5000)
+            if !existed {
+                try execute("PRAGMA journal_mode=WAL")
+                try execute("PRAGMA synchronous=FULL")
+                try execute("BEGIN IMMEDIATE")
+                try execute("CREATE TABLE state (id INTEGER PRIMARY KEY CHECK(id=1), json BLOB NOT NULL)")
+                try execute("CREATE TABLE records (id TEXT PRIMARY KEY, kind TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
+                try execute("CREATE TABLE events (id TEXT PRIMARY KEY, type_id TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
                 try write(HealthState())
                 try execute("PRAGMA user_version = 1")
-            } else if count != 1 { throw error() }
-            else if try intPragma("user_version") == 0 {
-                // Legacy single-blob layout: split records/events into their tables once; never touch attachment folders.
-                let legacy = try decodeState(readBlob())
-                try syncRecords(old:[],new:legacy.records)
-                try syncEvents(old:[],new:legacy.events)
-                try writeBlob(core(legacy))
-                try execute("PRAGMA user_version = 1")
+                try execute("COMMIT")
             } else {
-                try writeBlob(core(decodeState(readBlob()))) // Normalize any older core JSON in place.
+                let version = try intPragma("user_version")
+                guard (0...1).contains(version) else { throw HealthError("不支持此数据库版本，原资料已保留 / Unsupported database version; original retained") }
+                // Validate the complete save before any migration or write pragma.
+                _ = try readVersioned()
+                if version == 0 && access == .readWriteExisting { throw HealthError("请先打开主 App 完成资料升级 / Open the main app to upgrade this database") }
+                if version == 0 && access == .application {
+                    try execute("BEGIN IMMEDIATE")
+                    let legacy = try decodeState(readBlob())
+                    try execute("CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, kind TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
+                    try execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, type_id TEXT NOT NULL, occurred_at REAL NOT NULL, json BLOB NOT NULL)")
+                    try syncRecords(old:[],new:legacy.records)
+                    try syncEvents(old:[],new:legacy.events)
+                    try writeBlob(core(legacy))
+                    try execute("PRAGMA user_version = 1")
+                    try execute("COMMIT")
+                }
+                if access != .readOnlyExisting { try execute("PRAGMA synchronous=FULL") }
             }
-            try execute("COMMIT")
-        } catch { try? execute("ROLLBACK"); throw error }
+        } catch { if db != nil { try? execute("ROLLBACK"); sqlite3_close_v2(db); db = nil }; throw error }
     }
     deinit { sqlite3_close(db) }
     private func error() -> HealthError { HealthError("数据库操作失败 / Database error: \(String(cString:sqlite3_errmsg(db)))") }
@@ -64,7 +89,8 @@ final class HealthDatabase {
         var st: OpaquePointer?
         guard sqlite3_prepare_v2(db,"PRAGMA \(name)",-1,&st,nil)==SQLITE_OK else { throw error() }
         defer { sqlite3_finalize(st) }
-        return sqlite3_step(st)==SQLITE_ROW ? Int(sqlite3_column_int(st,0)) : 0
+        guard sqlite3_step(st)==SQLITE_ROW else { throw error() }
+        return Int(sqlite3_column_int(st,0))
     }
     /// Core state = everything except the row-based collections.
     private func core(_ state: HealthState) -> HealthState { var c = state; c.records = []; c.events = []; return c }
@@ -93,13 +119,16 @@ final class HealthDatabase {
     }
     private func loadRows(_ table: String) throws -> [Data] {
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db,"SELECT json FROM \(table)",-1,&statement,nil)==SQLITE_OK else { throw error() }
+        guard sqlite3_prepare_v2(db,"SELECT json FROM \(table) ORDER BY id",-1,&statement,nil)==SQLITE_OK else { throw error() }
         defer { sqlite3_finalize(statement) }
         var rows: [Data] = []
-        while sqlite3_step(statement)==SQLITE_ROW {
+        var result = sqlite3_step(statement)
+        while result==SQLITE_ROW {
             guard let ptr = sqlite3_column_blob(statement,0) else { throw error() }
             rows.append(Data(bytes:ptr,count:Int(sqlite3_column_bytes(statement,0))))
+            result = sqlite3_step(statement)
         }
+        guard result == SQLITE_DONE else { throw error() }
         return rows
     }
     private func upsertRow(_ table: String, id: String, owner: String, occurredAt: Date, json: Data) throws {
@@ -120,9 +149,9 @@ final class HealthDatabase {
         guard sqlite3_step(statement)==SQLITE_DONE else { throw error() }
     }
     private func syncRecords(old: [HealthRecord], new: [HealthRecord]) throws {
-        let oldStamps = Dictionary(old.map { ($0.id,$0.updatedAt) }, uniquingKeysWith: { a,_ in a })
+        let previous = Dictionary(old.map { ($0.id,$0) }, uniquingKeysWith: { a,_ in a })
         let newIDs = Set(new.map(\.id))
-        for record in new where oldStamps[record.id] != record.updatedAt {
+        for record in new where previous[record.id] != record {
             try upsertRow("records",id:record.id.uuidString,owner:record.kind.rawValue,occurredAt:record.occurredAt,json:JSONEncoder().encode(record))
         }
         for record in old where !newIDs.contains(record.id) { try deleteRow("records",id:record.id.uuidString) }
@@ -136,13 +165,31 @@ final class HealthDatabase {
         }
         for event in old where !newIDs.contains(event.id) { try deleteRow("events",id:event.id.uuidString) }
     }
-    func read() throws -> HealthState {
-        var state = try decodeState(readBlob())
+    func read() throws -> HealthState { try readVersioned().state }
+    func readVersioned() throws -> Snapshot {
+        lock.lock(); defer { lock.unlock() }
+        let ownsTransaction = sqlite3_get_autocommit(db) != 0
+        if ownsTransaction { try execute("BEGIN DEFERRED") }
         do {
-            state.records = try loadRows("records").map { try JSONDecoder().decode(HealthRecord.self,from:$0) }
-            state.events = try loadRows("events").map { try JSONDecoder().decode(HealthEvent.self,from:$0) }
-            try Engine.validate(state); return state
+            let version = try intPragma("user_version")
+            guard (0...1).contains(version) else { throw HealthError("不支持此数据库版本 / Unsupported database version") }
+            let blob = try readBlob()
+            var state = try decodeState(blob)
+            var chunks = [blob]
+            if version == 1 {
+                let records = try loadRows("records"), events = try loadRows("events")
+                state.records = try records.map { try JSONDecoder().decode(HealthRecord.self,from:$0) }
+                state.events = try events.map { try JSONDecoder().decode(HealthEvent.self,from:$0) }
+                chunks += records + events
+            }
+            try Engine.validate(state)
+            var digest = SHA256()
+            for chunk in chunks { digest.update(data:Data("\(chunk.count):".utf8)); digest.update(data:chunk) }
+            let revision = digest.finalize().map { String(format:"%02x",$0) }.joined()
+            if ownsTransaction { try execute("COMMIT") }
+            return Snapshot(state:state,revision:revision)
         } catch {
+            if ownsTransaction { try? execute("ROLLBACK") }
             throw HealthError("存档读取失败，原文件已保留。请从备份恢复。 / Save unreadable; original retained. Restore a backup.\n\(error.localizedDescription)")
         }
     }
@@ -153,6 +200,8 @@ final class HealthDatabase {
         try syncEvents(old:previous?.events ?? [],new:state.events)
     }
     @discardableResult func transaction(request: String? = nil,now: Date = Date(),_ operation: (inout HealthState) throws -> Void) throws -> HealthState {
+        lock.lock(); defer { lock.unlock() }
+        guard access != .readOnlyExisting else { throw HealthError("此连接只读 / This database connection is read only") }
         try execute("BEGIN IMMEDIATE")
         do {
             var state = try read()
@@ -162,7 +211,9 @@ final class HealthDatabase {
             if let request { state.requests.insert(request) }
             try Engine.validate(state)
             state.updatedAt = now
-            try write(state,previous:previous); try execute("COMMIT"); return state
+            try write(state,previous:previous); try execute("COMMIT")
+            HealthWidgetData.databaseDidChange(directory:directory,now:now)
+            return state
         } catch { try? execute("ROLLBACK"); throw error }
     }
     func backupData(_ state: HealthState) throws -> Data {
@@ -180,6 +231,7 @@ final class HealthDatabase {
         return (state,backup.createdAt)
     }
     func automaticBackup() throws {
+        guard access != .readOnlyExisting else { throw HealthError("此连接只读 / This database connection is read only") }
         // A consistent read snapshot; a failed backup never changes health records.
         let state = try read(); let day = Engine.day(Date(),state)
         let folder = directory.appendingPathComponent("Backups")
@@ -191,6 +243,8 @@ final class HealthDatabase {
         for file in daily.dropFirst(7) { try FileManager.default.removeItem(at:file) }
     }
     func restore(_ state: HealthState) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard access != .readOnlyExisting else { throw HealthError("此连接只读 / This database connection is read only") }
         try Engine.validate(state)
         try execute("BEGIN IMMEDIATE")
         do {
@@ -209,9 +263,12 @@ final class HealthDatabase {
                 guard code==SQLITE_DONE else { throw error() }
             }
             try write(state,previous:try? read()); try execute("COMMIT")
+            HealthWidgetData.databaseDidChange(directory:directory,now:Date())
         } catch { try? execute("ROLLBACK"); throw error }
     }
     func erase() throws {
+        lock.lock(); defer { lock.unlock() }
+        guard access != .readOnlyExisting else { throw HealthError("此连接只读 / This database connection is read only") }
         try execute("BEGIN IMMEDIATE")
         do {
             try writeBlob(core(HealthState()))
@@ -222,6 +279,7 @@ final class HealthDatabase {
         if FileManager.default.fileExists(atPath:backups.path) { try FileManager.default.removeItem(at:backups) }
         try execute("PRAGMA wal_checkpoint(TRUNCATE)")
         try execute("VACUUM")
+        HealthWidgetData.databaseDidChange(directory:directory,now:Date())
     }
 }
 

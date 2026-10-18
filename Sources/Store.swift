@@ -21,6 +21,8 @@ import UniformTypeIdentifiers
     @Published var sleepSyncedAt: Date?
     private var sleepDatabase: SharedSleepStore?
     private var sleepRefreshTimer: Timer?
+    private var dataRefreshTimer: Timer?
+    private var timeObservers: [NSObjectProtocol] = []
     private var db: HealthDatabase?
     /// app 级语言（gqns.language）变化时推动界面重渲染；en 直读解析器，不依赖本字段取值。
     @Published private var languageRevision = 0
@@ -40,15 +42,37 @@ import UniformTypeIdentifiers
         DistributedNotificationCenter.default().addObserver(forName: SharedSleepStore.changedNotification, object:nil, queue:.main) { [weak self] _ in
             Task { @MainActor in self?.syncSleepRewards() }
         }
+        DistributedNotificationCenter.default().addObserver(forName:HealthDatabase.changedNotification,object:nil,queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.reload(retryWidgetPublication:false) }
+        }
+        // Recover a notification missed during sleep without polling WidgetKit.
+        dataRefreshTimer = Timer.scheduledTimer(withTimeInterval:60,repeats:true) { [weak self] _ in
+            Task { @MainActor in self?.reload() }
+        }
+        for name in [NSNotification.Name.NSSystemTimeZoneDidChange, .NSCalendarDayChanged, NSNotification.Name("NSSystemClockDidChangeNotification")] {
+            timeObservers.append(NotificationCenter.default.addObserver(forName:name,object:nil,queue:.main) { [weak self] _ in
+                Task { @MainActor in self?.refreshForTimeChange() }
+            })
+        }
+        timeObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName:NSWorkspace.didWakeNotification,object:nil,queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.refreshForTimeChange() }
+        })
         sleepRefreshTimer = Timer.scheduledTimer(withTimeInterval:15,repeats:true) { [weak self] _ in
             Task { @MainActor in self?.syncSleepRewards() }
         }
         reload()
     }
-    func reload() {
+    private func refreshForTimeChange() {
+        reload()
+        if let db { HealthWidgetData.databaseDidChange(directory:db.directory,now:Date()) }
+    }
+    func reload(retryWidgetPublication: Bool = true) {
         do {
             if db == nil { db = try HealthDatabase() }
-            if let db { state = try db.read(); Engine.settle(&state,now:Date()) }
+            if let db {
+                state = try db.read(); Engine.settle(&state,now:Date())
+                if retryWidgetPublication { HealthWidgetData.retryPending(directory:db.directory,now:Date()) }
+            }
             fatalError = nil
             // 语言统一走 app 级 gqns.language：把解析结果回写存档字段，
             // 让 Engine 游戏文案与 Widget 扩展（独立进程，只读存档）与主界面保持一致。
@@ -62,7 +86,6 @@ import UniformTypeIdentifiers
         guard let db else { message = fatalError; return false }
         do {
             state = try db.transaction(request:request,op)
-            WidgetCenter.shared.reloadAllTimelines()
             do { try db.automaticBackup() } catch { notice = t("记录已保存，自动备份失败，可在设置中手动备份。","Saved; automatic backup failed. Use manual backup in Settings.") }
             return true
         } catch { message = error.localizedDescription; return false }
@@ -154,6 +177,11 @@ import UniformTypeIdentifiers
             // A corrupt/unreadable library is an error, never an empty replacement.
             try HealthSleepImport.migrateLegacy(to:shared)
             sleepRecords = try shared.records()
+            let revision = sleepRecords.map { "\($0.id):\($0.endedAt.timeIntervalSince1970):\($0.durationSeconds)" }.sorted().joined(separator:"|")
+            if revision != lastSleepRevision, let db {
+                lastSleepRevision = revision
+                HealthWidgetData.databaseDidChange(directory:db.directory,now:Date())
+            }
             sleepSyncError = nil
             sleepSyncedAt = Date()
         } catch { sleepSyncError = error.localizedDescription; return }
@@ -167,6 +195,7 @@ import UniformTypeIdentifiers
             DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.health.sleepReward"),object:nil,userInfo:["energy":gained,"paused":state.island.paused],deliverImmediately:true)
         }
     }
+    private var lastSleepRevision: String?
     private func sharedSleeps() throws -> SharedSleepStore {
         if let sleepDatabase { return sleepDatabase }
         let result = try SharedSleepStore()
