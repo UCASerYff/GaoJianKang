@@ -5,7 +5,7 @@ APP=${GAO_PACKAGE_APP:-"$ROOT/build.noindex/搞健康.app"}
 STAGE="$ROOT/.release.noindex"
 RELEASE_APP="$STAGE/搞健康.app"
 SIGNING_IDENTITY=${GAO_SIGNING_IDENTITY:-A15B2B2D22B018CBC842063C9A8A589946647524}
-codesign --verify --deep --strict "$APP"
+python3 "$ROOT/scripts/install_safety.py" verify-bundle "$APP"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 [[ "$VERSION" == "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")" ]] || { echo '构建版本与源码版本不一致';exit 1;}
 rm -rf "$STAGE"
@@ -19,7 +19,7 @@ done
 codesign --force --sign "$SIGNING_IDENTITY" "$RELEASE_APP/Contents/Frameworks/Health.framework"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$RELEASE_APP/Contents/PlugIns/GaoJianKangWidgets.appex"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$RELEASE_APP"
-codesign --verify --deep --strict "$RELEASE_APP"
+python3 "$ROOT/scripts/install_safety.py" verify-bundle "$RELEASE_APP"
 ditto -c -k --keepParent --norsrc --noextattr "$RELEASE_APP" "$ROOT/dist/GaoJianKang-$VERSION.zip"
 (cd "$ROOT/dist"; shasum -a 256 "GaoJianKang-$VERSION.zip" > "GaoJianKang-$VERSION.zip.sha256")
 echo "Packaged $ROOT/dist/GaoJianKang-$VERSION.zip"

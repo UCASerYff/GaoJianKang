@@ -1,17 +1,17 @@
-# 搞健康 V4.03
+# 搞健康 V4.04
 
 独立 macOS 应用，包含本模块完整业务、游戏场景和 WidgetKit 小组件。运行不依赖搞七廿三或其他六个应用；联动功能需要同时安装相关应用。
 
 ## 下载与安装
 
-从 [Releases](https://github.com/UCASerYff/GaoJianKang/releases/latest) 下载 `GaoJianKang-4.03.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
+从 [Releases](https://github.com/UCASerYff/GaoJianKang/releases/latest) 下载 `GaoJianKang-4.04.zip` 和同名 `.sha256` 文件。仓库保存源码，安装包作为 Release 附件单独发布。
 
 1. 支持 macOS 14 或更高版本、Apple Silicon；暂未提供 Intel 版本。
 2. 解压 ZIP，将 `搞健康.app` 拖入“应用程序”文件夹。
 3. 如果 macOS 拦截打开，请先确认软件来源，再进入“系统设置 → 隐私与安全性”，允许该应用打开。发行包使用 Apple Development 签名，未做 Apple 公证。
 4. 安装后运行一次，再从系统小组件列表添加本应用的小组件。整合版的小组件需要重新添加。
 
-下载后可在文件所在目录运行 `shasum -a 256 -c GaoJianKang-4.03.zip.sha256` 核验安装包。校验文件名包含中文，命令行请给文件名加引号。
+下载后可在文件所在目录运行 `shasum -a 256 -c GaoJianKang-4.04.zip.sha256` 核验安装包。校验文件名包含中文，命令行请给文件名加引号。
 
 ## 功能
 
@@ -83,3 +83,11 @@ V4.0 从整合版拆分时保留业务历史、余额、库存、游戏进度、
 `./scripts/test_widget_data.sh` 是临时目录中的生产数据库/缓存/时间线定向测试，不启动 App、浏览器、模拟器或桌面窗口。默认不进行冒烟测试。真实桌面最终显示与延迟、不同尺寸和多个实例、重加、重启、睡醒及真实午夜仍需用户手动验收；不能仅凭 reload 调用、编译或隔离测试宣布实际桌面刷新问题已完全解决。诊断记录位于健康资料目录的 `WidgetDiagnostics-v1.json`，只保留最近 32 条摘要，含时间、版本摘要和数量，不上传到仓库。
 
 WidgetKit 的请求与展示由系统调度，开发者不能用计划 entry 日期证明最终展示时刻，参见 [Apple：Keeping a widget up to date](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date)。
+
+## V4.04 恢复与安装安全
+
+完整恢复在替换现有资料之前验证备份中的真实健康数据库、支持的存储/业务版本及完整记录，缺失或不可读的主库不能被当成空白资料恢复。恢复前保留原偏好域，包括明确不存在的状态；失败或可恢复的中断同时回滚资料与偏好，原钥匙串保持不变。
+
+安装优先使用校验过的发行归档，同时核对主程序、框架、小组件的身份及版本/构建。暂存和回滚全过程使用 `.noindex` 容器，回滚归档、摘要和恢复收据保留。安装脚本成功不能替代实际用户会话的 Spotlight、LaunchServices 与唯一正式入口核验。
+
+原第 07 项的实际桌面、真实按钮往返、全尺寸多实例、生命周期与时间边界验收仍按证据逐项记录。已完成的隔离测试不改写为真实桌面通过；外接设备相关项标为“不做（用户取消）”，不计为通过。

@@ -1,38 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
-SOURCE="$ROOT/build.noindex/搞健康.app"
-if [[ ! -d "$SOURCE" ]]; then
-    SOURCE="$ROOT/.install.noindex/搞健康.app"
-    mkdir -p "$ROOT/.install.noindex"
-    VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")
-    (cd "$ROOT/dist";shasum -a 256 -c "GaoJianKang-$VERSION.zip.sha256")
-    ditto -x -k "$ROOT/dist/GaoJianKang-$VERSION.zip" "$ROOT/.install.noindex"
-fi
-TARGET="/Applications/搞健康.app"
-LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-codesign --verify --deep --strict "$SOURCE"
-[[ "$(codesign -dv "$SOURCE" 2>&1 | sed -n 's/^TeamIdentifier=//p')" == "5G96498KGJ" ]] || { echo '需要团队签名';exit 1;}
-if pgrep -f '^/Applications/搞健康.app/Contents/MacOS/GaoJianKang' >/dev/null; then echo '请先退出当前应用';exit 1;fi
-STAMP=$(date +%Y%m%d-%H%M%S)
-SAFETY="$ROOT/rollback/搞健康-$STAMP.app"
-mkdir -p "$ROOT/rollback"
-if [[ -d "$TARGET" ]]; then
-    pluginkit -r "$TARGET/Contents/PlugIns/GaoJianKangWidgets.appex"
-    "$LSREGISTER" -u "$TARGET"
-    mv "$TARGET" "$SAFETY"
-fi
-if ! ditto "$SOURCE" "$TARGET" || ! codesign --verify --deep --strict "$TARGET" || ! "$LSREGISTER" -f -R "$TARGET" || ! pluginkit -a "$TARGET/Contents/PlugIns/GaoJianKangWidgets.appex"; then
-    "$LSREGISTER" -u "$TARGET" || true
-    pluginkit -r "$TARGET/Contents/PlugIns/GaoJianKangWidgets.appex" || true
-    rm -rf "$TARGET"
-    if [[ -d "$SAFETY" ]];then
-        mv "$SAFETY" "$TARGET"
-        "$LSREGISTER" -f -R "$TARGET"
-        pluginkit -a "$TARGET/Contents/PlugIns/GaoJianKangWidgets.appex"
-    fi
-    exit 1
-fi
-killall -TERM GaoJianKangWidgets 2>/dev/null || true
-rm -rf "$ROOT/.install.noindex"
-echo "Installed $TARGET"
+# Always install the verified, sanitized release archive, never a stale build.
+# Recovery: ./scripts/install.sh recover /absolute/path/to/recover.json
+if (( $# == 0 )); then set -- install; fi
+exec python3 "$ROOT/scripts/install_safety.py" "$@"

@@ -1,9 +1,12 @@
 import AppKit
 import Foundation
+#if !BACKUP_SAFETY_TEST
+import Health
+#endif
 
 /// Validate before approval, then apply before any module opens its data on next launch.
 enum AppBackupRestore {
-    struct Job:Codable { var staged:URL;var safety:URL;var applying=false;var operations:[Operation]=[] }
+    struct Job:Codable { var staged:URL;var safety:URL;var applying=false;var operations:[Operation]=[];var originalPreferences:URL? }
     struct Operation:Codable { var source:URL;var destination:URL;var previous:URL;var hadPrevious:Bool }
     static var jobs:URL { if let test=ProcessInfo.processInfo.environment["GQNS_RESTORE_ROOT"] { return URL(fileURLWithPath:test) };return FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("GaoSeriesRestore/Health") }
     static var pending:URL { jobs.appendingPathComponent("pending.json") }
@@ -27,6 +30,8 @@ enum AppBackupRestore {
             guard manifest.version.compare(current,options:.numeric) != .orderedDescending,
                   fm.fileExists(atPath:root.appendingPathComponent("ApplicationSupport-Health").path),
                   fm.fileExists(atPath:root.appendingPathComponent("AppGroupContainer").path) else { throw CocoaError(.fileReadCorruptFile) }
+            try HealthArchiveValidation.validate(directory:root.appendingPathComponent("AppGroupContainer/Health"))
+            _ = try RestorePreferences.incoming(root)
             return (root,manifest)
         } catch { try? fm.removeItem(at:root);throw error }
     }
@@ -51,11 +56,21 @@ enum AppBackupRestore {
         guard fm.fileExists(atPath:pending.path) else { return }
         var job=try JSONDecoder().decode(Job.self,from:Data(contentsOf:pending))
         try requireSharedSleepPeerClosed(job.staged)
-        if job.applying { try rollback(job);try fm.removeItem(at:pending);throw CocoaError(.fileWriteUnknown) }
+        if job.applying {
+            // Old interrupted jobs did not retain original preferences. Keep all
+            // their evidence instead of guessing that the old domains were empty.
+            guard job.originalPreferences != nil else { throw CocoaError(.fileReadCorruptFile) }
+            try rollback(job);try fm.removeItem(at:pending);throw CocoaError(.fileWriteUnknown)
+        }
         _ = try BackupIntegrity.verify(job.staged)
         try AppBackupExport.validateSharedSleep(job.staged.appendingPathComponent("AppGroupContainer/SharedSleep",isDirectory:true))
+        try HealthArchiveValidation.validate(directory:job.staged.appendingPathComponent("AppGroupContainer/Health"))
+        let preferences = try RestorePreferences.incoming(job.staged)
         guard let app=AppDataLocations.appSupport,let group=AppDataLocations.groupContainer else { throw CocoaError(.fileNoSuchFile) }
         try fm.createDirectory(at:job.safety,withIntermediateDirectories:true)
+        let preferencesFile=job.safety.appendingPathComponent("original-preferences.json")
+        try RestorePreferences.capture(to:preferencesFile)
+        job.originalPreferences=preferencesFile
         job.operations=[Operation(source:job.staged.appendingPathComponent("ApplicationSupport-Health"),destination:app,previous:job.safety.appendingPathComponent("ApplicationSupport"),hadPrevious:fm.fileExists(atPath:app.path))]
         let groupSource=job.staged.appendingPathComponent("AppGroupContainer")
         let incoming=try fm.contentsOfDirectory(at:groupSource,includingPropertiesForKeys:nil).filter { !$0.lastPathComponent.hasPrefix(".com.apple.") }
@@ -73,10 +88,8 @@ enum AppBackupRestore {
                 if op.hadPrevious { try fm.moveItem(at:op.destination,to:op.previous) }
                 if fm.fileExists(atPath:op.source.path) { try fm.copyItem(at:op.source,to:op.destination) }
             }
-            if let data=try? Data(contentsOf:job.staged.appendingPathComponent("preferences.plist")),let preferences=try PropertyListSerialization.propertyList(from:data,options:[],format:nil) as? [String:[String:Any]] {
-                if let domain=preferences["standard"] {UserDefaults.standard.setPersistentDomain(domain,forName:Bundle.main.bundleIdentifier!)}
-                if let domain=preferences["module"] {UserDefaults.standard.setPersistentDomain(domain,forName:"com.gaoseries.GaoJianKang.Health")}
-            }
+            try HealthArchiveValidation.validate(directory:group.appendingPathComponent("Health"))
+            try RestorePreferences.apply(preferences)
             try fm.removeItem(at:pending)
             try? fm.removeItem(at:job.staged)
         } catch {
@@ -87,6 +100,10 @@ enum AppBackupRestore {
     }
     private static func rollback(_ job:Job) throws {
         let fm=FileManager.default
+        guard let preferences=job.originalPreferences else { throw CocoaError(.fileReadCorruptFile) }
+        // Validate and restore the durable receipt before touching rollback data.
+        // A failed preference restore leaves the pending job available to retry.
+        try RestorePreferences.restore(from:preferences)
         for op in job.operations.reversed() {
             if fm.fileExists(atPath:op.previous.path) {
                 if fm.fileExists(atPath:op.destination.path) { try fm.removeItem(at:op.destination) }
