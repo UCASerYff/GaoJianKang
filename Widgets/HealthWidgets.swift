@@ -310,19 +310,23 @@ struct EventWidgetView: View {
         let en=s.preferences.english
         let type=s.eventTypes.first { $0.id == entry.typeID }
         let days=EventLog.month(entry.statisticsDate,state:s,type:entry.typeID)
+        let month=Engine.calendar(s).component(.month,from:entry.statisticsDate)
+        let monthCount=days.reduce(0){$0+$1.count}
         let selected=s.eventTypes.filter { !$0.archived && (entry.typeID == nil ? $0.inWidget : $0.id == entry.typeID) }
         return VStack(alignment:.leading,spacing:family == .systemLarge ? 8 : 5) {
             HStack {
                 Text(type?.title(en) ?? (en ? "Quick events" : "快速事项")).font(.headline).lineLimit(1)
                 Spacer(minLength:4)
-                Text("\(Engine.calendar(s).component(.month,from:entry.statisticsDate))"+(en ? " / mo" : " 月")).font(.caption).foregroundStyle(.secondary)
+                Text(family == .systemMedium
+                     ? (en ? "\(month) / mo · \(monthCount)" : "\(month) 月 · \(monthCount) 次")
+                     : "\(month)"+(en ? " / mo" : " 月"))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
             if family == .systemMedium {
                 HStack(alignment:.top,spacing:16) {
                     grid(days,s,color(type?.color ?? "blue")).frame(maxWidth:.infinity)
-                    VStack(alignment:.leading,spacing:7) {
-                        Text(en ? "\(days.reduce(0){$0+$1.count}) this month" : "本月 \(days.reduce(0){$0+$1.count}) 次").font(.caption).foregroundStyle(.secondary)
-                        ForEach(Array(selected.prefix(3))) { shortcut($0,s) }
+                    VStack(alignment:.leading,spacing:4) {
+                        ForEach(Array(selected.prefix(3))) { shortcut($0,s).controlSize(.mini) }
                         if selected.count>3 { Link(en ? "All events →" : "全部事项 →",destination:URL(string:"gaojiankang://events")!).font(.caption2) }
                     }.frame(width:115)
                 }
